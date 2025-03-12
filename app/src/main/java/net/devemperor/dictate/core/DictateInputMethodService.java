@@ -766,7 +766,7 @@ public class DictateInputMethodService extends InputMethodService {
         speechApiThread.execute(() -> {
             try {
                 CreateTranscriptionRequest request = CreateTranscriptionRequest.builder()
-                        .model("whisper-1")
+                        .model("whisper-large-v3")
                         .responseFormat("verbose_json")
                         .language(!language.equals("detect") ? language : null)
                         .prompt(!stylePrompt.isEmpty() ? stylePrompt : null)
@@ -774,7 +774,7 @@ public class DictateInputMethodService extends InputMethodService {
                 TranscriptionResult result = service.createTranscription(request, audioFile);
                 String resultText = result.getText();
 
-                usageDb.edit("whisper-1", result.getDuration().longValue(), 0, 0);
+                usageDb.edit("whisper-large-v3", result.getDuration().longValue(), 0, 0);
 
                 if (!instantPrompt) {
                     InputConnection inputConnection = getCurrentInputConnection();
