@@ -755,7 +755,7 @@ public class DictateInputMethodService extends InputMethodService {
         String apiKey = sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY");
         String language = currentInputLanguageValue;
         Retrofit retrofit = new Retrofit.Builder()
-                .baseUrl(sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false) ? customApiHost : "https://api.openai.com/")
+                .baseUrl(sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false) ? customApiHost : "https://api.groq.com/openai/v1/")
                 .client(defaultClient(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120)).newBuilder().build())
                 .addConverterFactory(JacksonConverterFactory.create(defaultObjectMapper()))
                 .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
