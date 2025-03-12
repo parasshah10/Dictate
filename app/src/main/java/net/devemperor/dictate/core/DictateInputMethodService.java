@@ -41,11 +41,11 @@ import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.crashlytics.FirebaseCrashlytics;
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import com.theokanning.openai.audio.CreateTranscriptionRequest;
 import com.theokanning.openai.audio.TranscriptionResult;
 import com.theokanning.openai.client.OpenAiApi;
@@ -64,8 +64,6 @@ import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
 import net.devemperor.dictate.usage.UsageDatabaseHelper;
-
-import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.IOException;
@@ -90,7 +88,6 @@ import retrofit2.Call;
 import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
-import retrofit2.converter.gson.GsonConverterFactory;
 import retrofit2.converter.jackson.JacksonConverterFactory;
 
 // MAIN CLASS
@@ -153,7 +150,7 @@ public class DictateInputMethodService extends InputMethodService {
     PromptsKeyboardAdapter promptsAdapter;
     UsageDatabaseHelper usageDb;
 
-    // Start method that is called when user opens the keyboard
+    // start method that is called when user opens the keyboard
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public View onCreateInputView() {
@@ -792,11 +789,12 @@ public class DictateInputMethodService extends InputMethodService {
     }
 
     private void processGroqTranscription(String baseUrl, String apiKey, String language, String stylePrompt) throws RuntimeException {
-        // Create a Retrofit instance with GSON converter for Groq
+        // Create a Retrofit instance with Jackson converter for Groq
+        ObjectMapper objectMapper = defaultObjectMapper();
         Retrofit retrofit = new Retrofit.Builder()
                 .baseUrl(baseUrl)
                 .client(defaultClient(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120)).newBuilder().build())
-                .addConverterFactory(GsonConverterFactory.create())
+                .addConverterFactory(JacksonConverterFactory.create(objectMapper))
                 .build();
         
         // Create the multipart request for the audio file
@@ -823,7 +821,7 @@ public class DictateInputMethodService extends InputMethodService {
         GroqApiService groqService = retrofit.create(GroqApiService.class);
         
         // Make the API call
-        Call<JsonObject> call = groqService.createTranscription(
+        Call<ObjectNode> call = groqService.createTranscription(
                 filePart, 
                 modelBody, 
                 responseFormatBody,
@@ -833,13 +831,13 @@ public class DictateInputMethodService extends InputMethodService {
         
         try {
             // Execute the call synchronously
-            Response<JsonObject> response = call.execute();
+            Response<ObjectNode> response = call.execute();
             
             if (!response.isSuccessful()) {
                 throw new RuntimeException("API call failed with code: " + response.code() + " and message: " + response.errorBody().string());
             }
             
-            JsonObject result = response.body();
+            ObjectNode result = response.body();
             
             if (result == null) {
                 throw new RuntimeException("Empty response from API");
@@ -848,7 +846,7 @@ public class DictateInputMethodService extends InputMethodService {
             // Extract the transcription text
             String resultText;
             if (result.has("text")) {
-                resultText = result.get("text").getAsString();
+                resultText = result.get("text").asText();
             } else {
                 // If using text response format, the entire response may be the text
                 resultText = result.toString();
@@ -861,7 +859,7 @@ public class DictateInputMethodService extends InputMethodService {
             // For duration, use a default or try to extract it if available
             long durationValue = 0;
             if (result.has("duration")) {
-                durationValue = (long) result.get("duration").getAsDouble();
+                durationValue = (long) result.get("duration").asDouble();
             }
             
             // Log usage data
@@ -1130,11 +1128,11 @@ public class DictateInputMethodService extends InputMethodService {
         }
     }
 
-    // New interface for Groq API service
+    // New interface for Groq API service using Jackson's ObjectNode instead of Gson's JsonObject
     interface GroqApiService {
         @retrofit2.http.Multipart
         @retrofit2.http.POST("audio/transcriptions")
-        Call<JsonObject> createTranscription(
+        Call<ObjectNode> createTranscription(
             @retrofit2.http.Part MultipartBody.Part file,
             @retrofit2.http.Part("model") RequestBody model,
             @retrofit2.http.Part("response_format") RequestBody responseFormat,
