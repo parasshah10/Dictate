@@ -43,6 +43,9 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.firebase.crashlytics.FirebaseCrashlytics;
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.theokanning.openai.audio.CreateTranscriptionRequest;
 import com.theokanning.openai.audio.TranscriptionResult;
 import com.theokanning.openai.client.OpenAiApi;
@@ -54,13 +57,15 @@ import com.theokanning.openai.service.OpenAiService;
 
 import net.devemperor.dictate.BuildConfig;
 import net.devemperor.dictate.DictateUtils;
+import net.devemperor.dictate.R;
 import net.devemperor.dictate.rewording.PromptModel;
 import net.devemperor.dictate.rewording.PromptsDatabaseHelper;
 import net.devemperor.dictate.rewording.PromptsKeyboardAdapter;
 import net.devemperor.dictate.rewording.PromptsOverviewActivity;
 import net.devemperor.dictate.settings.DictateSettingsActivity;
-import net.devemperor.dictate.R;
 import net.devemperor.dictate.usage.UsageDatabaseHelper;
+
+import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
 import java.io.IOException;
@@ -78,20 +83,24 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import okhttp3.MediaType;
+import okhttp3.MultipartBody;
+import okhttp3.RequestBody;
+import retrofit2.Call;
+import retrofit2.Response;
 import retrofit2.Retrofit;
 import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory;
+import retrofit2.converter.gson.GsonConverterFactory;
 import retrofit2.converter.jackson.JacksonConverterFactory;
 
 // MAIN CLASS
 public class DictateInputMethodService extends InputMethodService {
-
     // define handlers and runnables for background tasks
     private Handler mainHandler;
     private Handler deleteHandler;
     private Handler recordTimeHandler;
     private Runnable deleteRunnable;
     private Runnable recordTimeRunnable;
-
     // define variables and objects
     private long elapsedTime;
     private boolean isDeleting = false;
@@ -106,7 +115,6 @@ public class DictateInputMethodService extends InputMethodService {
     private boolean spaceButtonUserHasSwiped = false;
     private int currentInputLanguagePos;
     private String currentInputLanguageValue;
-
     private MediaRecorder recorder;
     private ExecutorService speechApiThread;
     private ExecutorService rewordingApiThread;
@@ -115,7 +123,6 @@ public class DictateInputMethodService extends InputMethodService {
     private SharedPreferences sp;
     private AudioManager am;
     private AudioFocusRequest audioFocusRequest;
-
     // define views
     private ConstraintLayout dictateKeyboardView;
     private MaterialButton settingsButton;
@@ -142,32 +149,26 @@ public class DictateInputMethodService extends InputMethodService {
     private MaterialButton editCopyButton;
     private MaterialButton editPasteButton;
     private LinearLayout overlayCharactersLl;
-
     PromptsDatabaseHelper promptsDb;
     PromptsKeyboardAdapter promptsAdapter;
-
     UsageDatabaseHelper usageDb;
 
-    // start method that is called when user opens the keyboard
+    // Start method that is called when user opens the keyboard
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public View onCreateInputView() {
         Context context = new ContextThemeWrapper(this, R.style.Theme_Dictate);
-
         // initialize some stuff
         mainHandler = new Handler(Looper.getMainLooper());
         deleteHandler = new Handler();
         recordTimeHandler = new Handler(Looper.getMainLooper());
-
         vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
         sp = getSharedPreferences("net.devemperor.dictate", MODE_PRIVATE);
         promptsDb = new PromptsDatabaseHelper(this);
         usageDb = new UsageDatabaseHelper(this);
         vibrationEnabled = sp.getBoolean("net.devemperor.dictate.vibration", true);
         currentInputLanguagePos = sp.getInt("net.devemperor.dictate.input_language_pos", 0);
-
         dictateKeyboardView = (ConstraintLayout) LayoutInflater.from(context).inflate(R.layout.activity_dictate_keyboard_view, null);
-
         settingsButton = dictateKeyboardView.findViewById(R.id.settings_btn);
         recordButton = dictateKeyboardView.findViewById(R.id.record_btn);
         resendButton = dictateKeyboardView.findViewById(R.id.resend_btn);
@@ -177,33 +178,26 @@ public class DictateInputMethodService extends InputMethodService {
         spaceButton = dictateKeyboardView.findViewById(R.id.space_btn);
         pauseButton = dictateKeyboardView.findViewById(R.id.pause_btn);
         enterButton = dictateKeyboardView.findViewById(R.id.enter_btn);
-
         infoCl = dictateKeyboardView.findViewById(R.id.info_cl);
         infoTv = dictateKeyboardView.findViewById(R.id.info_tv);
         infoYesButton = dictateKeyboardView.findViewById(R.id.info_yes_btn);
         infoNoButton = dictateKeyboardView.findViewById(R.id.info_no_btn);
-
         promptsLl = dictateKeyboardView.findViewById(R.id.prompts_keyboard_ll);
         promptsRv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_rv);
         runningPromptPb = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_pb);
         runningPromptTv = dictateKeyboardView.findViewById(R.id.prompts_keyboard_running_prompt_tv);
-
         editSelectAllButton = dictateKeyboardView.findViewById(R.id.edit_select_all_btn);
         editUndoButton = dictateKeyboardView.findViewById(R.id.edit_undo_btn);
         editRedoButton = dictateKeyboardView.findViewById(R.id.edit_redo_btn);
         editCutButton = dictateKeyboardView.findViewById(R.id.edit_cut_btn);
         editCopyButton = dictateKeyboardView.findViewById(R.id.edit_copy_btn);
         editPasteButton = dictateKeyboardView.findViewById(R.id.edit_paste_btn);
-
         overlayCharactersLl = dictateKeyboardView.findViewById(R.id.overlay_characters_ll);
-
         promptsRv.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
-
         // if user id is not set, set a random number as user id
         if (sp.getString("net.devemperor.dictate.user_id", "null").equals("null")) {
             sp.edit().putString("net.devemperor.dictate.user_id", String.valueOf((int) (Math.random() * 1000000))).apply();
         }
-
         recordTimeRunnable = new Runnable() {  // runnable to update the record button time text
             @Override
             public void run() {
@@ -213,7 +207,6 @@ public class DictateInputMethodService extends InputMethodService {
                 recordTimeHandler.postDelayed(this, 100);
             }
         };
-
         // initialize audio manager to stop and start background audio
         am = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
@@ -228,17 +221,14 @@ public class DictateInputMethodService extends InputMethodService {
                     }
                 })
                 .build();
-
         settingsButton.setOnClickListener(v -> {
             if (isRecording) trashButton.performClick();
             infoCl.setVisibility(View.GONE);
             openSettingsActivity();
         });
-
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
         recordButton.setOnClickListener(v -> {
             vibrate();
-
             infoCl.setVisibility(View.GONE);
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                 openSettingsActivity();
@@ -248,10 +238,8 @@ public class DictateInputMethodService extends InputMethodService {
                 stopRecording();
             }
         });
-
         recordButton.setOnLongClickListener(v -> {
             vibrate();
-
             if (!isRecording) {  // open real settings activity to start file picker
                 Intent intent = new Intent(this, DictateSettingsActivity.class);
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -260,19 +248,16 @@ public class DictateInputMethodService extends InputMethodService {
             }
             return true;
         });
-
         resendButton.setOnClickListener(v -> {
             vibrate();
             // if user clicked on resendButton without error before, audioFile is default audio
             if (audioFile == null) audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.mp3"));
             startWhisperApiRequest();
         });
-
         backspaceButton.setOnClickListener(v -> {
             vibrate();
             deleteOneCharacter();
         });
-
         backspaceButton.setOnLongClickListener(v -> {
             isDeleting = true;
             startDeleteTime = System.currentTimeMillis();
@@ -300,7 +285,6 @@ public class DictateInputMethodService extends InputMethodService {
             deleteHandler.post(deleteRunnable);
             return true;
         });
-
         backspaceButton.setOnTouchListener((v, event) -> {
             if (event.getAction() == MotionEvent.ACTION_UP) {
                 isDeleting = false;
@@ -308,23 +292,18 @@ public class DictateInputMethodService extends InputMethodService {
             }
             return false;
         });
-
         switchButton.setOnClickListener(v -> {
             vibrate();
-
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 switchToPreviousInputMethod();
             }
         });
-
         switchButton.setOnLongClickListener(v -> {
             vibrate();
-
             currentInputLanguagePos++;
             recordButton.setText(getDictateButtonText());
             return true;
         });
-
         // trash button to abort the recording and reset all variables and views
         trashButton.setOnClickListener(v -> {
             vibrate();
@@ -332,13 +311,11 @@ public class DictateInputMethodService extends InputMethodService {
                 recorder.stop();
                 recorder.release();
                 recorder = null;
-
                 if (recordTimeRunnable != null) {
                     recordTimeHandler.removeCallbacks(recordTimeRunnable);
                 }
             }
             if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-
             isRecording = false;
             isPaused = false;
             instantPrompt = false;
@@ -349,7 +326,6 @@ public class DictateInputMethodService extends InputMethodService {
             pauseButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_pause_24));
             trashButton.setVisibility(View.GONE);
         });
-
         // space button that changes cursor position if user swipes over it
         spaceButton.setOnTouchListener((v, event) -> {
             InputConnection inputConnection = getCurrentInputConnection();
@@ -361,7 +337,6 @@ public class DictateInputMethodService extends InputMethodService {
                         spaceButtonUserHasSwiped = false;
                         spaceButton.setTag(event.getX());
                         break;
-
                     case MotionEvent.ACTION_MOVE:
                         float x = (float) spaceButton.getTag();
                         if (event.getX() - x > 30) {
@@ -374,7 +349,6 @@ public class DictateInputMethodService extends InputMethodService {
                             spaceButtonUserHasSwiped = true;
                         }
                         break;
-
                     case MotionEvent.ACTION_UP:
                         if (!spaceButtonUserHasSwiped) {
                             vibrate();
@@ -388,7 +362,6 @@ public class DictateInputMethodService extends InputMethodService {
             }
             return false;
         });
-
         pauseButton.setOnClickListener(v -> {
             vibrate();
             if (recorder != null) {
@@ -407,10 +380,8 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             }
         });
-
         enterButton.setOnClickListener(v -> {
             vibrate();
-
             InputConnection inputConnection = getCurrentInputConnection();
             if (inputConnection != null) {
                 EditorInfo editorInfo = getCurrentInputEditorInfo();
@@ -422,13 +393,11 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             }
         });
-
         enterButton.setOnLongClickListener(v -> {
             vibrate();
             overlayCharactersLl.setVisibility(View.VISIBLE);
             return true;
         });
-
         enterButton.setOnTouchListener((v, event) -> {
             if (overlayCharactersLl.getVisibility() == View.VISIBLE) {
                 switch (event.getAction()) {
@@ -462,14 +431,11 @@ public class DictateInputMethodService extends InputMethodService {
             }
             return false;
         });
-
         editSelectAllButton.setOnClickListener(v -> {
             vibrate();
-
             InputConnection inputConnection = getCurrentInputConnection();
             if (inputConnection != null) {
                 ExtractedText extractedText = inputConnection.getExtractedText(new ExtractedTextRequest(), 0);
-
                 if (inputConnection.getSelectedText(0) == null && extractedText.text.length() > 0) {
                     inputConnection.performContextMenuAction(android.R.id.selectAll);
                     editSelectAllButton.setForeground(AppCompatResources.getDrawable(context, R.drawable.ic_baseline_deselect_24));
@@ -484,7 +450,6 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             }
         });
-
         // initialize all edit buttons
         Object[][] buttonsActions = {
                 { editUndoButton, android.R.id.undo },
@@ -493,7 +458,6 @@ public class DictateInputMethodService extends InputMethodService {
                 { editCopyButton, android.R.id.copy },
                 { editPasteButton, android.R.id.paste }
         };
-
         for (Object[] pair : buttonsActions) {
             ((Button) pair[0]).setOnClickListener(v -> {
                 vibrate();
@@ -503,13 +467,11 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             });
         }
-
         // initialize overlay characters
         for (int i = 0; i < 8; i++) {
             TextView charView = (TextView) LayoutInflater.from(context).inflate(R.layout.item_overlay_characters, overlayCharactersLl, false);
             overlayCharactersLl.addView(charView);
         }
-
         return dictateKeyboardView;
     }
 
@@ -517,22 +479,18 @@ public class DictateInputMethodService extends InputMethodService {
     @Override
     public void onFinishInputView(boolean finishingInput) {
         super.onFinishInputView(finishingInput);
-
         if (recorder != null) {
             try {
                 recorder.stop();
             } catch (RuntimeException ignored) { }
             recorder.release();
             recorder = null;
-
             if (recordTimeRunnable != null) {
                 recordTimeHandler.removeCallbacks(recordTimeRunnable);
             }
         }
-
         if (speechApiThread != null) speechApiThread.shutdownNow();
         if (rewordingApiThread != null) rewordingApiThread.shutdownNow();
-
         pauseButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_pause_24));
         pauseButton.setVisibility(View.GONE);
         trashButton.setVisibility(View.GONE);
@@ -551,10 +509,8 @@ public class DictateInputMethodService extends InputMethodService {
     @Override
     public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
-
         if (sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
             promptsLl.setVisibility(View.VISIBLE);
-
             // collect all prompts from database
             List<PromptModel> data;
             InputConnection inputConnection = getCurrentInputConnection();
@@ -565,11 +521,9 @@ public class DictateInputMethodService extends InputMethodService {
                 data = promptsDb.getAll(true);
                 editSelectAllButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_deselect_24));
             }
-
             promptsAdapter = new PromptsKeyboardAdapter(data, position -> {
                 vibrate();
                 PromptModel model = data.get(position);
-
                 if (model.getId() == -1) {  // instant prompt clicked
                     instantPrompt = true;
                     if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -591,7 +545,6 @@ public class DictateInputMethodService extends InputMethodService {
         } else {
             promptsLl.setVisibility(View.GONE);
         }
-
         // enable resend button if previous audio file still exists in cache
         if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.mp3")).exists()
                 && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
@@ -599,7 +552,6 @@ public class DictateInputMethodService extends InputMethodService {
         } else {
             resendButton.setVisibility(View.GONE);
         }
-
         // fill all overlay characters
         String charactersString = sp.getString("net.devemperor.dictate.overlay_characters", "()-:!?,.");
         for (int i = 0; i < overlayCharactersLl.getChildCount(); i++) {
@@ -611,13 +563,10 @@ public class DictateInputMethodService extends InputMethodService {
                 charView.setText(charactersString.substring(i, i + 1));
             }
         }
-
         // get the currently selected input language
         recordButton.setText(getDictateButtonText());
-
         // check if user enabled audio focus
         audioFocusEnabled = sp.getBoolean("net.devemperor.dictate.audio_focus", true);
-
         // show infos for updates, ratings or donations
         if (sp.getInt("net.devemperor.dictate.last_version_code", 0) < BuildConfig.VERSION_CODE) {
             showInfo("update");
@@ -626,15 +575,12 @@ public class DictateInputMethodService extends InputMethodService {
         } else if (sp.getFloat("net.devemperor.dictate.total_duration", 0.0f) > 600 && !sp.getBoolean("net.devemperor.dictate.flag_has_donated", false)) {
             showInfo("donate");
         }
-
         // start audio file transcription if user selected an audio file
         if (!sp.getString("net.devemperor.dictate.transcription_audio_file", "").isEmpty()) {
             audioFile = new File(getCacheDir(), sp.getString("net.devemperor.dictate.transcription_audio_file", ""));
             sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
-
             sp.edit().remove("net.devemperor.dictate.transcription_audio_file").apply();
             startWhisperApiRequest();
-
         } else if (sp.getBoolean("net.devemperor.dictate.instant_recording", false)) {
             recordButton.performClick();
         }
@@ -645,7 +591,6 @@ public class DictateInputMethodService extends InputMethodService {
     @Override
     public void onUpdateSelection (int oldSelStart, int oldSelEnd, int newSelStart, int newSelEnd, int candidatesStart, int candidatesEnd) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd);
-
         // refill all prompts
         if (sp != null && sp.getBoolean("net.devemperor.dictate.rewording_enabled", true)) {
             List<PromptModel> data;
@@ -656,7 +601,6 @@ public class DictateInputMethodService extends InputMethodService {
                 data = promptsDb.getAll(true);
                 editSelectAllButton.setForeground(AppCompatResources.getDrawable(this, R.drawable.ic_baseline_deselect_24));
             }
-
             promptsAdapter.getData().clear();
             promptsAdapter.getData().addAll(data);
             promptsAdapter.notifyDataSetChanged();
@@ -680,7 +624,6 @@ public class DictateInputMethodService extends InputMethodService {
     private void startRecording() {
         audioFile = new File(getCacheDir(), "audio.mp3");
         sp.edit().putString("net.devemperor.dictate.last_file_name", audioFile.getName()).apply();
-
         recorder = new MediaRecorder();
         recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
         recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
@@ -688,23 +631,19 @@ public class DictateInputMethodService extends InputMethodService {
         recorder.setAudioEncodingBitRate(64000);
         recorder.setAudioSamplingRate(44100);
         recorder.setOutputFile(audioFile);
-
         if (audioFocusEnabled) am.requestAudioFocus(audioFocusRequest);
-
         try {
             recorder.prepare();
             recorder.start();
         } catch (IOException e) {
             sendLogToCrashlytics(e);
         }
-
         recordButton.setText(R.string.dictate_send);
         recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_send_20, 0, 0, 0);
         pauseButton.setVisibility(View.VISIBLE);
         trashButton.setVisibility(View.VISIBLE);
         resendButton.setVisibility(View.GONE);
         isRecording = true;
-
         elapsedTime = 0;
         recordTimeHandler.post(recordTimeRunnable);
     }
@@ -716,13 +655,17 @@ public class DictateInputMethodService extends InputMethodService {
             } catch (RuntimeException ignored) { }
             recorder.release();
             recorder = null;
-
             if (recordTimeRunnable != null) {
                 recordTimeHandler.removeCallbacks(recordTimeRunnable);
             }
-
             startWhisperApiRequest();
         }
+    }
+
+    private boolean isUsingGroq() {
+        String customApiHost = sp.getString("net.devemperor.dictate.custom_api_host", getString(R.string.dictate_custom_host_hint));
+        return sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false) && 
+               customApiHost.toLowerCase().contains("groq.com");
     }
 
     private void startWhisperApiRequest() {
@@ -736,9 +679,8 @@ public class DictateInputMethodService extends InputMethodService {
         infoCl.setVisibility(View.GONE);
         isRecording = false;
         isPaused = false;
-
         if (audioFocusEnabled) am.abandonAudioFocusRequest(audioFocusRequest);
-
+        
         String stylePrompt;
         switch (sp.getInt("net.devemperor.dictate.style_prompt_selection", 1)) {
             case 1:
@@ -750,77 +692,61 @@ public class DictateInputMethodService extends InputMethodService {
             default:
                 stylePrompt = "";
         }
-
+        
         String customApiHost = sp.getString("net.devemperor.dictate.custom_api_host", getString(R.string.dictate_custom_host_hint));
         String apiKey = sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY");
         String language = currentInputLanguageValue;
-        Retrofit retrofit = new Retrofit.Builder()
-                .baseUrl(sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false) ? customApiHost : "https://api.groq.com/openai/v1/")
-                .client(defaultClient(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120)).newBuilder().build())
-                .addConverterFactory(JacksonConverterFactory.create(defaultObjectMapper()))
-                .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
-                .build();
-        OpenAiService service = new OpenAiService(retrofit.create(OpenAiApi.class));
-
+        
+        // Check if using Groq API
+        boolean isUsingGroq = isUsingGroq();
+        
+        // Ensure the custom API host ends with a trailing slash for Retrofit
+        if (customApiHost != null && !customApiHost.endsWith("/")) {
+            customApiHost += "/";
+        }
+        
+        // Set the base URL
+        String baseUrl = sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false) ? 
+                         customApiHost : "https://api.openai.com/v1/";
+                         
         speechApiThread = Executors.newSingleThreadExecutor();
         speechApiThread.execute(() -> {
             try {
-                CreateTranscriptionRequest request = CreateTranscriptionRequest.builder()
-                        .model("whisper-large-v3")
-                        .responseFormat("verbose_json")
-                        .language(!language.equals("detect") ? language : null)
-                        .prompt(!stylePrompt.isEmpty() ? stylePrompt : null)
-                        .build();
-                TranscriptionResult result = service.createTranscription(request, audioFile);
-                String resultText = result.getText();
-
-                usageDb.edit("whisper-large-v3", result.getDuration().longValue(), 0, 0);
-
-                if (!instantPrompt) {
-                    InputConnection inputConnection = getCurrentInputConnection();
-                    if (inputConnection != null) {
-                        if (sp.getBoolean("net.devemperor.dictate.instant_output", false)) {
-                            inputConnection.commitText(resultText, 1);
-                        } else {
-                            int speed = sp.getInt("net.devemperor.dictate.output_speed", 5);
-                            for (int i = 0; i < resultText.length(); i++) {
-                                char character = resultText.charAt(i);
-                                mainHandler.postDelayed(() -> inputConnection.commitText(String.valueOf(character), 1), (long) (i * (20L / (speed / 5f))));
-                            }
-                        }
-                    }
+                if (isUsingGroq) {
+                    // Use custom Groq implementation
+                    processGroqTranscription(baseUrl, apiKey, language, stylePrompt);
                 } else {
-                    // continue with ChatGPT API request
-                    instantPrompt = false;
-                    startGPTApiRequest(new PromptModel(-1, Integer.MIN_VALUE, "", resultText, false));
+                    // Use standard OpenAI implementation
+                    processOpenAITranscription(baseUrl, apiKey, language, stylePrompt);
                 }
-
+                
+                // Re-enable resend button if file exists
                 if (new File(getCacheDir(), sp.getString("net.devemperor.dictate.last_file_name", "audio.mp3")).exists()
                         && sp.getBoolean("net.devemperor.dictate.resend_button", false)) {
                     mainHandler.post(() -> resendButton.setVisibility(View.VISIBLE));
                 }
-
             } catch (RuntimeException e) {
-                // check if RuntimeException was caused by InterruptedIOException
+                // Check if RuntimeException was caused by InterruptedIOException
                 if (!(e.getCause() instanceof InterruptedIOException)) {
                     sendLogToCrashlytics(e);
-
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
-                        if (Objects.requireNonNull(e.getMessage()).contains("SocketTimeoutException")) {
+                        String errorMsg = e.getMessage();
+                        if (errorMsg == null) {
+                            showInfo("internet_error");
+                        } else if (errorMsg.contains("SocketTimeoutException")) {
                             showInfo("timeout");
-                        } else if (e.getMessage().contains("API key")) {
+                        } else if (errorMsg.contains("API key")) {
                             showInfo("invalid_api_key");
-                        } else if (e.getMessage().contains("quota")) {
+                        } else if (errorMsg.contains("quota")) {
                             showInfo("quota_exceeded");
-                        } else if (e.getMessage().contains("content size limit")) {
+                        } else if (errorMsg.contains("content size limit")) {
                             showInfo("content_size_limit");
-                        } else if (e.getMessage().contains("format")) {
+                        } else if (errorMsg.contains("format")) {
                             showInfo("format_not_supported");
                         } else if (sp.getBoolean("net.devemperor.dictate.custom_api_host_enabled", false)) {
-                            if (e.getMessage().contains("ConnectException")) {
+                            if (errorMsg.contains("ConnectException")) {
                                 showInfo("internet_error");
                             } else {
                                 showInfo("unknown_host");
@@ -830,14 +756,144 @@ public class DictateInputMethodService extends InputMethodService {
                         }
                     });
                 }
+            } finally {
+                mainHandler.post(() -> {
+                    recordButton.setText(getDictateButtonText());
+                    recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
+                    recordButton.setEnabled(true);
+                });
             }
-
-            mainHandler.post(() -> {
-                recordButton.setText(getDictateButtonText());
-                recordButton.setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_baseline_mic_20, 0, R.drawable.ic_baseline_folder_open_20, 0);
-                recordButton.setEnabled(true);
-            });
         });
+    }
+
+    private void processOpenAITranscription(String baseUrl, String apiKey, String language, String stylePrompt) {
+        Retrofit retrofit = new Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(defaultClient(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120)).newBuilder().build())
+                .addConverterFactory(JacksonConverterFactory.create(defaultObjectMapper()))
+                .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
+                .build();
+        
+        OpenAiService service = new OpenAiService(retrofit.create(OpenAiApi.class));
+        
+        CreateTranscriptionRequest request = CreateTranscriptionRequest.builder()
+                .model("whisper-1")
+                .responseFormat("verbose_json")
+                .language(!language.equals("detect") ? language : null)
+                .prompt(!stylePrompt.isEmpty() ? stylePrompt : null)
+                .build();
+                
+        TranscriptionResult result = service.createTranscription(request, audioFile);
+        String resultText = result.getText();
+        usageDb.edit("whisper-1", result.getDuration().longValue(), 0, 0);
+        
+        // Process the transcription result
+        processTranscriptionResult(resultText);
+    }
+
+    private void processGroqTranscription(String baseUrl, String apiKey, String language, String stylePrompt) throws RuntimeException {
+        // Create a Retrofit instance with GSON converter for Groq
+        Retrofit retrofit = new Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(defaultClient(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120)).newBuilder().build())
+                .addConverterFactory(GsonConverterFactory.create())
+                .build();
+        
+        // Create the multipart request for the audio file
+        RequestBody fileBody = RequestBody.create(MediaType.parse("audio/mpeg"), audioFile);
+        MultipartBody.Part filePart = MultipartBody.Part.createFormData("file", audioFile.getName(), fileBody);
+        
+        // Create request parts for other parameters
+        RequestBody modelBody = RequestBody.create(MediaType.parse("text/plain"), "whisper-large-v3-turbo");
+        RequestBody responseFormatBody = RequestBody.create(MediaType.parse("text/plain"), "text");
+        
+        // Add language if specified
+        RequestBody languageBody = null;
+        if (!language.equals("detect")) {
+            languageBody = RequestBody.create(MediaType.parse("text/plain"), language);
+        }
+        
+        // Add prompt if specified
+        RequestBody promptBody = null;
+        if (!stylePrompt.isEmpty()) {
+            promptBody = RequestBody.create(MediaType.parse("text/plain"), stylePrompt);
+        }
+        
+        // Create the API interface
+        GroqApiService groqService = retrofit.create(GroqApiService.class);
+        
+        // Make the API call
+        Call<JsonObject> call = groqService.createTranscription(
+                filePart, 
+                modelBody, 
+                responseFormatBody,
+                languageBody,
+                promptBody
+        );
+        
+        try {
+            // Execute the call synchronously
+            Response<JsonObject> response = call.execute();
+            
+            if (!response.isSuccessful()) {
+                throw new RuntimeException("API call failed with code: " + response.code() + " and message: " + response.errorBody().string());
+            }
+            
+            JsonObject result = response.body();
+            
+            if (result == null) {
+                throw new RuntimeException("Empty response from API");
+            }
+            
+            // Extract the transcription text
+            String resultText;
+            if (result.has("text")) {
+                resultText = result.get("text").getAsString();
+            } else {
+                // If using text response format, the entire response may be the text
+                resultText = result.toString();
+                // Remove quotes if the response is just a quoted string
+                if (resultText.startsWith("\"") && resultText.endsWith("\"")) {
+                    resultText = resultText.substring(1, resultText.length() - 1);
+                }
+            }
+            
+            // For duration, use a default or try to extract it if available
+            long durationValue = 0;
+            if (result.has("duration")) {
+                durationValue = (long) result.get("duration").getAsDouble();
+            }
+            
+            // Log usage data
+            usageDb.edit("whisper-large-v3-turbo", durationValue, 0, 0);
+            
+            // Process the transcription result
+            processTranscriptionResult(resultText);
+            
+        } catch (IOException e) {
+            throw new RuntimeException("Error communicating with Groq API: " + e.getMessage(), e);
+        }
+    }
+
+    private void processTranscriptionResult(String resultText) {
+        if (!instantPrompt) {
+            InputConnection inputConnection = getCurrentInputConnection();
+            if (inputConnection != null) {
+                if (sp.getBoolean("net.devemperor.dictate.instant_output", false)) {
+                    inputConnection.commitText(resultText, 1);
+                } else {
+                    int speed = sp.getInt("net.devemperor.dictate.output_speed", 5);
+                    for (int i = 0; i < resultText.length(); i++) {
+                        char character = resultText.charAt(i);
+                        mainHandler.postDelayed(() -> inputConnection.commitText(String.valueOf(character), 1), (long) (i * (20L / (speed / 5f))));
+                    }
+                }
+            }
+        } else {
+            // Continue with ChatGPT API request
+            instantPrompt = false;
+            startGPTApiRequest(new PromptModel(-1, Integer.MIN_VALUE, "", resultText, false));
+        }
     }
 
     private void startGPTApiRequest(PromptModel model) {
@@ -848,10 +904,8 @@ public class DictateInputMethodService extends InputMethodService {
             runningPromptPb.setVisibility(View.VISIBLE);
             infoCl.setVisibility(View.GONE);
         });
-
         String apiKey = sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY");
         OpenAiService service = new OpenAiService(apiKey.replaceAll("[^ -~]", ""), Duration.ofSeconds(120));
-
         rewordingApiThread = Executors.newSingleThreadExecutor();
         rewordingApiThread.execute(() -> {
             try {
@@ -864,7 +918,6 @@ public class DictateInputMethodService extends InputMethodService {
                     if (getCurrentInputConnection().getSelectedText(0) != null) {
                         prompt += "\n\n" + getCurrentInputConnection().getSelectedText(0).toString();
                     }
-
                     String gptModel = sp.getString("net.devemperor.dictate.rewording_model", "gpt-4o-mini");
                     ChatCompletionRequest request = ChatCompletionRequest.builder()
                             .model(gptModel)
@@ -872,10 +925,8 @@ public class DictateInputMethodService extends InputMethodService {
                             .build();
                     ChatCompletionResult rewordedResult = service.createChatCompletion(request);
                     rewordedText = rewordedResult.getChoices().get(0).getMessage().getContent();
-
                     usageDb.edit(gptModel, 0, rewordedResult.getUsage().getPromptTokens(), rewordedResult.getUsage().getCompletionTokens());
                 }
-
                 InputConnection inputConnection = getCurrentInputConnection();
                 if (inputConnection != null) {
                     if (sp.getBoolean("net.devemperor.dictate.instant_output", false)) {
@@ -890,9 +941,7 @@ public class DictateInputMethodService extends InputMethodService {
                 }
             } catch (RuntimeException e) {
                 sendLogToCrashlytics(e);
-
                 if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
-
                 mainHandler.post(() -> {
                     if (Objects.requireNonNull(e.getMessage()).contains("SocketTimeoutException")) {
                         showInfo("timeout");
@@ -905,7 +954,6 @@ public class DictateInputMethodService extends InputMethodService {
                     }
                 });
             }
-
             mainHandler.post(() -> {
                 promptsRv.setVisibility(View.VISIBLE);
                 runningPromptTv.setVisibility(View.GONE);
@@ -932,7 +980,7 @@ public class DictateInputMethodService extends InputMethodService {
             }
         }
         crashlytics.setUserId(sp.getString("net.devemperor.dictate.user_id", "null"));
-        crashlytics.recordException(e);  // TODO comment while testing
+        crashlytics.recordException(e);
         StringWriter sw = new StringWriter();
         e.printStackTrace(new PrintWriter(sw));
         Log.e("DictateInputMethodService", sw.toString());
@@ -1046,10 +1094,8 @@ public class DictateInputMethodService extends InputMethodService {
         currentInputLanguagesValues = sp.getStringSet("net.devemperor.dictate.input_languages", currentInputLanguagesValues);
         List<String> allLanguagesValues = Arrays.asList(getResources().getStringArray(R.array.dictate_input_languages_values));
         List<String> recordDifferentLanguages = Arrays.asList(getResources().getStringArray(R.array.dictate_record_different_languages));
-
         if (currentInputLanguagePos >= currentInputLanguagesValues.size()) currentInputLanguagePos = 0;
         sp.edit().putInt("net.devemperor.dictate.input_language_pos", currentInputLanguagePos).apply();
-
         currentInputLanguageValue = currentInputLanguagesValues.toArray()[currentInputLanguagePos].toString();
         return recordDifferentLanguages.get(allLanguagesValues.indexOf(currentInputLanguagesValues.toArray()[currentInputLanguagePos].toString()));
     }
@@ -1058,7 +1104,6 @@ public class DictateInputMethodService extends InputMethodService {
         InputConnection inputConnection = getCurrentInputConnection();
         if (inputConnection != null) {
             CharSequence selectedText = inputConnection.getSelectedText(0);
-
             if (selectedText != null) {
                 inputConnection.commitText("", 1);
             } else {
@@ -1085,4 +1130,16 @@ public class DictateInputMethodService extends InputMethodService {
         }
     }
 
+    // New interface for Groq API service
+    interface GroqApiService {
+        @retrofit2.http.Multipart
+        @retrofit2.http.POST("audio/transcriptions")
+        Call<JsonObject> createTranscription(
+            @retrofit2.http.Part MultipartBody.Part file,
+            @retrofit2.http.Part("model") RequestBody model,
+            @retrofit2.http.Part("response_format") RequestBody responseFormat,
+            @retrofit2.http.Part("language") RequestBody language,
+            @retrofit2.http.Part("prompt") RequestBody prompt
+        );
+    }
 }
